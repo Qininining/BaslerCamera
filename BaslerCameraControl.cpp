@@ -16,17 +16,18 @@ void BaslerCameraControl::initSome()
     PylonInitialize();
     CTlFactory &TlFactory = CTlFactory::GetInstance();
     TlInfoList_t lstInfo;
-    int n = TlFactory.EnumerateTls(lstInfo);
+    int transportLayerCount = TlFactory.EnumerateTls(lstInfo);
 
     TlInfoList_t::const_iterator it;
     for ( it = lstInfo.begin(); it != lstInfo.end(); ++it ) {
         qDebug() << "FriendlyName: " << it->GetFriendlyName() << "FullName: " << it->GetFullName();
-        qDebug() << "VendorName: " << it->GetVendorName() << "DeviceClass: " << it->GetDeviceClass() ;
+        // qDebug() << "VendorName: " << it->GetVendorName() << "DeviceClass: " << it->GetDeviceClass() ;
     }
     UpdateCameraList();
-    emit sigCameraCount(n);
-    qDebug() << "SBasler Camera Count: " << n;
+    emit sigCameraCount(transportLayerCount);
+    // qDebug() << "transportLayerCount Count: " << transportLayerCount;
 }
+
 
 void BaslerCameraControl::deleteAll()
 {
@@ -49,13 +50,18 @@ QStringList BaslerCameraControl::cameras()
 
 void BaslerCameraControl::UpdateCameraList()
 {
+    m_cameralist.clear(); // 清空旧列表
+
     CTlFactory& TLFactory = CTlFactory::GetInstance();
     ITransportLayer * pTl = TLFactory.CreateTl("BaslerGigE");
     DeviceInfoList_t devices;
-    int n = pTl->EnumerateDevices(devices);
+    int cameraCount = pTl->EnumerateDevices(devices);
+    qDebug() << "Basler Camera Count: " << cameraCount;
+
     CInstantCameraArray cameraArray(devices.size());
-    if(n == 0) {
+    if(cameraCount == 0) {
         qDebug() << "Cannot find Any camera!";
+        emit sigCameraUpdate(m_cameralist); // 仍需发送空列表
         return;
     }
     for (int i=0 ; i<cameraArray.GetSize() ; i++) {
@@ -98,7 +104,7 @@ void BaslerCameraControl::onTimerGrabImage()
 {
     if(m_isOpenAcquire) {
         QImage image;
-        GrabImage(image, 5);
+        GrabImage(image);
         if(!image.isNull()) {
             emit sigCurrentImage(image);
         }
@@ -181,7 +187,7 @@ QString BaslerCameraControl::getFeatureTriggerSourceType()
     CEnumerationPtr  ptrTriggerSel = cameraNodeMap.GetNode ("TriggerSelector");
     ptrTriggerSel->FromString("FrameStart");
     CEnumerationPtr  ptrTrigger  = cameraNodeMap.GetNode ("TriggerMode");
-    ptrTrigger->SetIntValue(1);
+    ptrTrigger->SetIntValue(0);
     CEnumerationPtr  ptrTriggerSource = cameraNodeMap.GetNode ("TriggerSource");
 
     String_t str = ptrTriggerSource->ToString();
@@ -302,13 +308,16 @@ long BaslerCameraControl::StartAcquire()
         qDebug() << "BaslerCameraControl StartAcquire" << m_currentMode;
         if(m_currentMode == "Freerun")  {
             m_basler.StartGrabbing(GrabStrategy_LatestImageOnly,GrabLoop_ProvidedByInstantCamera);
+            onTimerGrabImage();
         } else if(m_currentMode == "Software") {
             m_basler.StartGrabbing(GrabStrategy_LatestImageOnly);
             onTimerGrabImage();
         } else if(m_currentMode == "Line1") {
             m_basler.StartGrabbing(GrabStrategy_OneByOne);
+            onTimerGrabImage();
         } else if(m_currentMode == "Line2") {
             m_basler.StartGrabbing(GrabStrategy_OneByOne);
+            onTimerGrabImage();
         }
     } catch (GenICam::GenericException &e) {
         OutputDebugString(L"StartAcquire error:");
@@ -366,6 +375,7 @@ long BaslerCameraControl::GrabImage(QImage &image, int timeout)
         }
     } catch (GenICam::GenericException &e) {
         OutputDebugString(L"GrabImage Error\n");
+        qCritical() << "GenICam 异常: " << QString::fromLocal8Bit(e.GetDescription());
         return -2;
     }  catch(...)  {
         OutputDebugString(L"ZP 11 Shot GetParam Try 12 No know Error\n");

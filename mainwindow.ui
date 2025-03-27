@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
-    <height>600</height>
+    <width>945</width>
+    <height>675</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -23,7 +23,7 @@
       <height>311</height>
      </rect>
     </property>
-    <widget class="QLabel" name="label">
+    <widget class="QLabel" name="label_pic">
      <property name="geometry">
       <rect>
        <x>0</x>
@@ -47,10 +47,20 @@
      </rect>
     </property>
     <property name="text">
-     <string>PushButton</string>
+     <string>开始采集</string>
     </property>
     <property name="checkable">
      <bool>true</bool>
+    </property>
+   </widget>
+   <widget class="QComboBox" name="comboBox_CamList">
+    <property name="geometry">
+     <rect>
+      <x>620</x>
+      <y>80</y>
+      <width>191</width>
+      <height>21</height>
+     </rect>
     </property>
    </widget>
   </widget>
@@ -59,7 +69,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>800</width>
+     <width>945</width>
      <height>21</height>
     </rect>
    </property>

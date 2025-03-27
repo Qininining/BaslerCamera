@@ -24,7 +24,7 @@ private slots:
 
 private:
     Ui::MainWindow *ui;
-    BaslerCameraControl* m_control = Q_NULLPTR;
+    BaslerCameraControl* m_Camera = Q_NULLPTR;
     QTransform  m_matrix;
 };
 #endif // MAINWINDOW_H
