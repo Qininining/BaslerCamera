@@ -2,16 +2,17 @@
 #define BASLERCAMERACONTROL_H
 
 #include <QObject>
-#include <pylon\PylonIncludes.h>
 #include <QImage>
 #include <QTimer>
+#include <QDebug>
 
-#define DOUBLE_MAX 100000
-#define DOUBLE_MIN 0
+#include <pylon/PylonIncludes.h>
+#include <pylon/BaslerUniversalInstantCamera.h>
+#include <opencv2/opencv.hpp>
 
-using namespace std;
 using namespace Pylon;
 using namespace GenApi;
+
 class BaslerCameraControl : public QObject
 {
     Q_OBJECT
@@ -29,40 +30,56 @@ public:
         Type_Basler_Height, //图片的高度
         Type_Basler_LineSource, //灯的触发信号
     };
-    void initSome();
+
+    void init();
     void deleteAll();
     QStringList cameras();
-    int OpenCamera(QString cameraSN);
-    int CloseCamera();
+    int openCamera(QString cameraName);
+    int closeCamera();
+    bool isOpen();
 
-    void setExposureTime(double time); // 设置曝光时间
-    int getExposureTime(); // 获取曝光时间
-    int getExposureTimeMin(); // 最小曝光时间
-    int getExposureTimeMax(); // 最大曝光时间
+
 
     void setFeatureTriggerSourceType(QString type); // 设置种类
     QString getFeatureTriggerSourceType(); // 获取种类：软触发、外触发等等
 
     void setFeatureTriggerModeType(bool on); // 设置模式触发
     bool getFeatureTriggerModeType(); // 获取模式触发
+
     void SetCamera(BaslerCameraControl::BaslerCameraControl_Type index, double tmpValue = 0.0); // 设置各种参数
     double GetCamera(BaslerCameraControl::BaslerCameraControl_Type index); // 获取各种参数
+    void setExposureTime(double time); // 设置曝光时间
+    int getExposureTime(); // 获取曝光时间
+    void setGain(double Gain);
+    int getGain();
+    void setFrameRate(int value);
+    int getFrameRate();
+    void autoExposureOnce();
 
     long GrabImage(QImage& image,int timeout = 2000);
+
     long StartAcquire(); // 开始采集
     long StopAcquire(); // 结束采集
+
+    cv::Mat qImageToCvMat(const QImage& qImage);
+    QImage cvMatToQImage(const cv::Mat& mat);
+
+
 signals:
     void sigCameraUpdate(QStringList list);
     void sigSizeChange(QSize size);
     void sigCameraCount(int count);
     void sigCurrentImage(QImage img);
+
 private:
     void UpdateCameraList();
     void CopyToImage(CGrabResultPtr pInBuffer, QImage &OutImage);
+
 private slots:
     void onTimerGrabImage();
+
 private:
-    CInstantCamera m_basler;
+    CBaslerUniversalInstantCamera m_basler;
     QStringList m_cameralist;
     QString m_currentMode;
     bool m_isOpenAcquire = false; // 是否开始采集

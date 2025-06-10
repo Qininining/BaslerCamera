@@ -3,6 +3,8 @@
 
 #include <QMainWindow>
 #include <QTransform>
+#include <QMessageBox>
+
 #include "BaslerCameraControl.h"
 
 QT_BEGIN_NAMESPACE
@@ -21,6 +23,12 @@ public:
 
 private slots:
     void on_pushButton_Start_clicked(bool checked);
+
+    void on_pushButton_Connect_clicked(bool checked);
+
+    void on_expose_clicked();
+
+    void on_horizontalSliderExpose_sliderMoved(int position);
 
 private:
     Ui::MainWindow *ui;

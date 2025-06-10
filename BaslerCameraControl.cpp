@@ -4,16 +4,20 @@
 
 BaslerCameraControl::BaslerCameraControl(QObject *parent) : QObject(parent)
 {
+    init();
 }
 
 BaslerCameraControl::~BaslerCameraControl()
 {
+    deleteAll();
 }
 
-void BaslerCameraControl::initSome()
+void BaslerCameraControl::init()
 {
-    qDebug() << "BaslerCameraControl: PylonInitialize initSome" ;
-    PylonInitialize();
+    qDebug() << "BaslerCameraControl: PylonInitialize init" ;
+
+    Pylon::PylonInitialize();
+
     CTlFactory &TlFactory = CTlFactory::GetInstance();
     TlInfoList_t lstInfo;
     int transportLayerCount = TlFactory.EnumerateTls(lstInfo);
@@ -36,15 +40,18 @@ void BaslerCameraControl::deleteAll()
         StopAcquire();
     }
     //关闭摄像头
-    CloseCamera();
+    closeCamera();
     //关闭库
-    qDebug() << "BaslerCameraControl deleteAll: PylonTerminate" ;
-    PylonTerminate();
+    // qDebug() << "BaslerCameraControl deleteAll: PylonTerminate" ;
+
+    Pylon::PylonTerminate();
+
     qDebug() << "BaslerCameraControl deleteAll: Close" ;
 }
 
 QStringList BaslerCameraControl::cameras()
 {
+    UpdateCameraList();
     return m_cameralist;
 }
 
@@ -102,21 +109,34 @@ void BaslerCameraControl::CopyToImage(CGrabResultPtr pInBuffer, QImage &OutImage
 
 void BaslerCameraControl::onTimerGrabImage()
 {
-    if(m_isOpenAcquire) {
+    if(m_isOpenAcquire && m_isOpen) {
         QImage image;
         GrabImage(image);
         if(!image.isNull()) {
             emit sigCurrentImage(image);
+
+            // // cv::Mat img = cv::imread("D:/Project/CHR/Git/MicroAssembly/res/1.png",1);//一定要使用绝对路径，其他可以回报错
+            // cv::Mat img = qImageToCvMat(image);
+
+            // if(img.empty()) {
+            //     std::cerr << "Image not found or unable to open" << std::endl;
+            // }
+            // else{
+            //     cv::namedWindow("Display window", cv::WINDOW_AUTOSIZE );
+            //     cv::imshow("Display window", img);
+            // }
+
+
         }
-        QTimer::singleShot(5, this, SLOT(onTimerGrabImage()));
+        QTimer::singleShot(20, this, SLOT(onTimerGrabImage()));
     }
 }
 
-int BaslerCameraControl::OpenCamera(QString cameraSN)
+int BaslerCameraControl::openCamera(QString cameraName)
 {
     try {
         CDeviceInfo cInfo;
-        String_t str = String_t(cameraSN.toStdString().c_str());
+        String_t str = String_t(cameraName.toStdString().c_str());
         cInfo.SetSerialNumber(str);
         m_basler.Attach(CTlFactory::GetInstance().CreateDevice(cInfo));
         m_basler.Open();
@@ -125,51 +145,111 @@ int BaslerCameraControl::OpenCamera(QString cameraSN)
         m_isOpen = true;
     } catch (GenICam::GenericException &e) {
         OutputDebugString(L"OpenCamera Error\n");
+        qCritical() << "GenICam 异常: " << QString::fromLocal8Bit(e.GetDescription());
         m_isOpen = false;
         return -2;
     }
     return 0;
 }
 
-int BaslerCameraControl::CloseCamera()
-{
-    if(!m_isOpen) {
-        return -1;
+bool BaslerCameraControl::isOpen() {
+    return m_isOpen;
+}
+
+
+int BaslerCameraControl::closeCamera() {
+    // 优先检查设备实际状态，而非依赖 m_isOpen
+    if (!m_basler.IsOpen()) {
+        m_isOpen = false; // 同步状态
+        return 0;
     }
+
     try {
-        if(m_basler.IsOpen()) {
-            m_basler.DetachDevice();
-            m_basler.Close();
+        if (m_basler.IsOpen()) {
+            m_basler.StopGrabbing();    // 停止图像采集
+            m_basler.DestroyDevice();   // 显式销毁设备句柄
+            m_basler.Close();           // 关闭相机连接
+            m_isOpen = false;
         }
-    } catch (GenICam::GenericException &e) {
-        OutputDebugString(LPCWSTR(e.GetDescription()));
+        return 0;
+    }
+    catch (const GenICam::GenericException& e) {
+        qCritical() << "关闭相机时发生 GenICam 异常: "
+                    << QString::fromLocal8Bit(e.GetDescription());
         return -2;
     }
-    return 0;
+    catch (const std::exception& e) {
+        qCritical() << "关闭相机时发生标准异常: " << e.what();
+        return -2;
+    }
+    catch (...) {
+        qCritical() << "关闭相机时发生未知异常";
+        return -2;
+    }
 }
 
 void BaslerCameraControl::setExposureTime(double time)
 {
+    //相机是否开启
+    if(!m_isOpen) return;
     SetCamera(Type_Basler_ExposureTimeAbs, time);
 }
 
 int BaslerCameraControl::getExposureTime()
 {
+    // if(!m_isOpen) return -1;
     return QString::number(GetCamera(Type_Basler_ExposureTimeAbs)).toInt();
 }
 
-int BaslerCameraControl::getExposureTimeMin()
+void BaslerCameraControl::setGain(double Gain)
 {
-    return DOUBLE_MIN;
+    // if(!m_isOpen) return;
+    SetCamera(Type_Basler_GainRaw, Gain);
 }
 
-int BaslerCameraControl::getExposureTimeMax()
+int BaslerCameraControl::getGain()
 {
-    return DOUBLE_MAX;
+    // if(!m_isOpen) return -1;
+    return QString::number(GetCamera(Type_Basler_GainRaw)).toInt();
+}
+
+void BaslerCameraControl::setFrameRate(int value)
+{
+    // if(!m_isOpen) return;
+    SetCamera(Type_Basler_AcquisitionFrameRateAbs, value);
+}
+int BaslerCameraControl::getFrameRate()
+{
+    // if(!m_isOpen) return -1;
+    return QString::number(GetCamera(Type_Basler_AcquisitionFrameRateAbs)).toInt();
+}
+
+
+void BaslerCameraControl::autoExposureOnce()
+{
+    // 相机是否开启
+    // if(!m_isOpen) return;
+    if ( !m_basler.ExposureAuto.IsWritable())
+    {
+        std::cout << "The camera does not support Exposure Auto." << std::endl << std::endl;
+        return;
+    }
+    m_basler.ExposureAuto.SetValue(Basler_UniversalCameraParams::ExposureAuto_Once);
+    int n = 0;
+    while (m_basler.ExposureAuto.GetValue() != Basler_UniversalCameraParams::ExposureAuto_Off)
+    {
+        ++n;
+        WaitObject::Sleep(100);
+        if (n > 100)
+        {
+            throw TIMEOUT_EXCEPTION( "The adjustment of auto exposure did not finish.");
+        }
+    }
 }
 
 void BaslerCameraControl::setFeatureTriggerSourceType(QString type)
 {
+    // if(!m_isOpen) return;
     //停止采集
     if(m_isOpenAcquire) {
         StopAcquire();
@@ -183,6 +263,7 @@ void BaslerCameraControl::setFeatureTriggerSourceType(QString type)
 
 QString BaslerCameraControl::getFeatureTriggerSourceType()
 {
+    // if(!m_isOpen) return "";
     INodeMap &cameraNodeMap = m_basler.GetNodeMap();
     CEnumerationPtr  ptrTriggerSel = cameraNodeMap.GetNode ("TriggerSelector");
     ptrTriggerSel->FromString("FrameStart");
@@ -197,6 +278,7 @@ QString BaslerCameraControl::getFeatureTriggerSourceType()
 
 void BaslerCameraControl::setFeatureTriggerModeType(bool on)
 {
+    // if(!m_isOpen) return;
     INodeMap &cameraNodeMap = m_basler.GetNodeMap();
     CEnumerationPtr  ptrTriggerSel = cameraNodeMap.GetNode ("TriggerSelector");
     ptrTriggerSel->FromString("FrameStart");
@@ -206,6 +288,7 @@ void BaslerCameraControl::setFeatureTriggerModeType(bool on)
 
 bool BaslerCameraControl::getFeatureTriggerModeType()
 {
+    // if(!m_isOpen) return false;
     INodeMap &cameraNodeMap = m_basler.GetNodeMap();
     CEnumerationPtr  ptrTriggerSel = cameraNodeMap.GetNode ("TriggerSelector");
     ptrTriggerSel->FromString("FrameStart");
@@ -215,6 +298,8 @@ bool BaslerCameraControl::getFeatureTriggerModeType()
 
 void BaslerCameraControl::SetCamera(BaslerCameraControl::BaslerCameraControl_Type index, double tmpValue)
 {
+    //相机是否开启
+    // if(!m_isOpen) return;
     INodeMap &cameraNodeMap = m_basler.GetNodeMap();
     switch (index) {
     case Type_Basler_Freerun: {
@@ -302,6 +387,7 @@ double BaslerCameraControl::GetCamera(BaslerCameraControl::BaslerCameraControl_T
 
 long BaslerCameraControl::StartAcquire()
 {
+    if(!m_isOpen) return -1;
     m_isOpenAcquire = true;
     qDebug() << "BaslerCameraControl IsGrabbing";
     try {
@@ -328,6 +414,7 @@ long BaslerCameraControl::StartAcquire()
 
 long BaslerCameraControl::StopAcquire()
 {
+    if(!m_isOpen) return -1;
     m_isOpenAcquire = false;
     qDebug() << "BaslerCameraControl StopAcquire";
     try {
@@ -370,7 +457,7 @@ long BaslerCameraControl::GrabImage(QImage &image, int timeout)
             default:  qDebug() << "what: default"; break;
             }
         } else {
-            OutputDebugString(L"Grab Error!!!");
+            // OutputDebugString(L"Grab Error!!!");
             return -3;
         }
     } catch (GenICam::GenericException &e) {
@@ -382,4 +469,87 @@ long BaslerCameraControl::GrabImage(QImage &image, int timeout)
         return -1;
     }
     return 0;
+}
+
+//Qimage 与 cv mat转换
+cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
+    switch (qImage.format()) {
+    case QImage::Format_RGB32:
+    case QImage::Format_ARGB32:
+    case QImage::Format_ARGB32_Premultiplied: {
+        // 将QImage的32位格式转换为BGR三通道
+        cv::Mat mat(qImage.height(), qImage.width(), CV_8UC4,
+                    const_cast<uchar*>(qImage.bits()),
+                    static_cast<size_t>(qImage.bytesPerLine()));
+        cv::Mat result;
+        cv::cvtColor(mat, result, cv::COLOR_BGRA2BGR); // 正确转换颜色通道
+        return result;
+    }
+    case QImage::Format_RGB888: {
+        // 转换RGB888到BGR格式
+        cv::Mat mat(qImage.height(), qImage.width(), CV_8UC3,
+                    const_cast<uchar*>(qImage.bits()),
+                    static_cast<size_t>(qImage.bytesPerLine()));
+        cv::Mat result;
+        cv::cvtColor(mat, result, cv::COLOR_RGB2BGR); // 修正颜色顺序
+        return result;
+    }
+    case QImage::Format_Grayscale8: {
+        // 直接复制灰度图像数据
+        cv::Mat mat(qImage.height(), qImage.width(), CV_8UC1,
+                    const_cast<uchar*>(qImage.bits()),
+                    static_cast<size_t>(qImage.bytesPerLine()));
+        return mat.clone(); // 确保数据独立
+    }
+    case QImage::Format_Indexed8: {
+        // 将索引色图像转换为 RGB32 格式（自动应用调色板）
+        QImage converted = qImage.convertToFormat(QImage::Format_RGB32);
+        if (converted.isNull()) {
+            qWarning() << "Failed to convert Indexed8 image to RGB32";
+            return cv::Mat();
+        }
+        return qImageToCvMat(converted); // 递归处理转换后的图像
+    }
+    default:
+        qWarning() << "Unsupported QImage format:" << qImage.format();
+        return cv::Mat();
+    }
+}
+
+// cv::Mat转QImage实现
+QImage BaslerCameraControl::cvMatToQImage(const cv::Mat& mat)
+{
+    try {
+        if(mat.empty()) return QImage();
+
+        switch(mat.type()) {
+        case CV_8UC3: { // BGR格式
+            cv::Mat rgbMat;
+            cv::cvtColor(mat, rgbMat, cv::COLOR_BGR2RGB);
+            return QImage(rgbMat.data,
+                          rgbMat.cols,
+                          rgbMat.rows,
+                          static_cast<int>(rgbMat.step),
+                          QImage::Format_RGB888).copy();
+        }
+        case CV_8UC4: { // BGRA格式
+            return QImage(mat.data,
+                          mat.cols,
+                          mat.rows,
+                          static_cast<int>(mat.step),
+                          QImage::Format_ARGB32).copy();
+        }
+        case CV_8UC1: // 灰度图
+            return QImage(mat.data,
+                          mat.cols,
+                          mat.rows,
+                          static_cast<int>(mat.step),
+                          QImage::Format_Grayscale8).copy();
+        default:
+            qWarning() << "Unsupported cv::Mat type:" << mat.type();
+            return QImage();
+        }
+    } catch (...) {
+        return QImage();
+    }
 }

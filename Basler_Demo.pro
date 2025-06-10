@@ -31,3 +31,7 @@ INCLUDEPATH += $$PWD/pylon/lib/x64
 DEPENDPATH += $$PWD/pylon/lib/x64
 win32: LIBS += -L$$PWD/pylon/lib/x64/ -lGCBase_MD_VC141_v3_1_Basler_pylon -lGenApi_MD_VC141_v3_1_Basler_pylon -lgxapi_v15 -lPylonBase_v9 -lPylonC_v9 -lPylonDataProcessing_v3 -lPylonGUI_v9 -lPylonUtility_v9 -luxapi_v14 -luxtopapi_v9
 
+win32:CONFIG(release, debug|release): LIBS += -L$$PWD/opencv/x64/vc16/lib/ -lopencv_world4100
+else:win32:CONFIG(debug, debug|release): LIBS += -L$$PWD/opencv/x64/vc16/lib/ -lopencv_world4100d
+INCLUDEPATH += $$PWD/opencv/include
+DEPENDPATH += $$PWD/opencv/include
