@@ -116,15 +116,15 @@ void BaslerCameraControl::onTimerGrabImage()
             emit sigCurrentImage(image);
 
             // // cv::Mat img = cv::imread("D:/Project/CHR/Git/MicroAssembly/res/1.png",1);//一定要使用绝对路径，其他可以回报错
-            // cv::Mat img = qImageToCvMat(image);
+            cv::Mat img = qImageToCvMat(image);
 
-            // if(img.empty()) {
-            //     std::cerr << "Image not found or unable to open" << std::endl;
-            // }
-            // else{
-            //     cv::namedWindow("Display window", cv::WINDOW_AUTOSIZE );
-            //     cv::imshow("Display window", img);
-            // }
+            if(img.empty()) {
+                std::cerr << "Image not found or unable to open" << std::endl;
+            }
+            else{
+                cv::namedWindow("Display window", cv::WINDOW_AUTOSIZE );
+                cv::imshow("Display window", img);
+            }
 
 
         }
@@ -471,7 +471,6 @@ long BaslerCameraControl::GrabImage(QImage &image, int timeout)
     return 0;
 }
 
-//Qimage 与 cv mat转换
 cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
     switch (qImage.format()) {
     case QImage::Format_RGB32:
@@ -482,7 +481,7 @@ cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
                     const_cast<uchar*>(qImage.bits()),
                     static_cast<size_t>(qImage.bytesPerLine()));
         cv::Mat result;
-        cv::cvtColor(mat, result, cv::COLOR_BGRA2BGR); // 正确转换颜色通道
+        cv::cvtColor(mat, result, cv::COLOR_BGRA2BGR);
         return result;
     }
     case QImage::Format_RGB888: {
@@ -491,7 +490,7 @@ cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
                     const_cast<uchar*>(qImage.bits()),
                     static_cast<size_t>(qImage.bytesPerLine()));
         cv::Mat result;
-        cv::cvtColor(mat, result, cv::COLOR_RGB2BGR); // 修正颜色顺序
+        cv::cvtColor(mat, result, cv::COLOR_RGB2BGR);
         return result;
     }
     case QImage::Format_Grayscale8: {
@@ -499,23 +498,40 @@ cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
         cv::Mat mat(qImage.height(), qImage.width(), CV_8UC1,
                     const_cast<uchar*>(qImage.bits()),
                     static_cast<size_t>(qImage.bytesPerLine()));
-        return mat.clone(); // 确保数据独立
+        return mat.clone();
     }
     case QImage::Format_Indexed8: {
-        // 将索引色图像转换为 RGB32 格式（自动应用调色板）
-        QImage converted = qImage.convertToFormat(QImage::Format_RGB32);
-        if (converted.isNull()) {
-            qWarning() << "Failed to convert Indexed8 image to RGB32";
-            return cv::Mat();
+        cv::Mat mat(qImage.height(), qImage.width(), CV_8UC1,
+                    const_cast<uchar*>(qImage.bits()),
+                    qImage.bytesPerLine());
+
+        if (qImage.colorTable().isEmpty()) {
+            return mat.clone();
         }
-        return qImageToCvMat(converted); // 递归处理转换后的图像
+
+        // 预计算调色板（BGR顺序）
+        std::vector<cv::Vec3b> palette;
+        for (QRgb rgb : qImage.colorTable()) {
+            palette.emplace_back(cv::Vec3b(qBlue(rgb), qGreen(rgb), qRed(rgb)));
+        }
+
+        // 应用调色板
+        cv::Mat colorMat(mat.size(), CV_8UC3);
+        for (int y = 0; y < mat.rows; ++y) {
+            const uchar* src = mat.ptr<uchar>(y);
+            cv::Vec3b* dst = colorMat.ptr<cv::Vec3b>(y);
+            for (int x = 0; x < mat.cols; ++x) {
+                dst[x] = palette[src[x]];
+            }
+        }
+        return colorMat;
     }
+
     default:
         qWarning() << "Unsupported QImage format:" << qImage.format();
         return cv::Mat();
     }
 }
-
 // cv::Mat转QImage实现
 QImage BaslerCameraControl::cvMatToQImage(const cv::Mat& mat)
 {
