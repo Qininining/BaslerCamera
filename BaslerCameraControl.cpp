@@ -2,17 +2,23 @@
 #include <QDateTime>
 #include <QDebug>
 
-BaslerCameraControl::BaslerCameraControl(QObject *parent) : QObject(parent)
+BaslerCameraControl::BaslerCameraControl(double hz)
 {
     init();
+    fps = hz;
+    this->m_coarseTimer_ = new QTimer();
+    this->m_coarseTimer_->setInterval(1.0 / fps * 1000);
+    this-> m_coarseTimer_->setTimerType(Qt::CoarseTimer);
+    QObject::connect(this->m_coarseTimer_, &QTimer::timeout, this, &BaslerCameraControl::grab);
 }
 
 BaslerCameraControl::~BaslerCameraControl()
 {
+    this->m_coarseTimer_->stop();
     deleteAll();
 }
 
-void BaslerCameraControl::init()
+bool BaslerCameraControl::init()
 {
     qDebug() << "BaslerCameraControl: PylonInitialize init" ;
 
@@ -21,18 +27,46 @@ void BaslerCameraControl::init()
     CTlFactory &TlFactory = CTlFactory::GetInstance();
     TlInfoList_t lstInfo;
     int transportLayerCount = TlFactory.EnumerateTls(lstInfo);
+    ITransportLayer * pTl = TlFactory.CreateTl("BaslerGigE");
+    DeviceInfoList_t devices;
+    int cameraCount = pTl->EnumerateDevices(devices);
 
-    TlInfoList_t::const_iterator it;
-    for ( it = lstInfo.begin(); it != lstInfo.end(); ++it ) {
-        qDebug() << "FriendlyName: " << it->GetFriendlyName() << "FullName: " << it->GetFullName();
-        // qDebug() << "VendorName: " << it->GetVendorName() << "DeviceClass: " << it->GetDeviceClass() ;
+    if (cameraCount >= 1){
+        TlInfoList_t::const_iterator it;
+        for ( it = lstInfo.begin(); it != lstInfo.end(); ++it ) {
+            qDebug() << "FriendlyName: " << it->GetFriendlyName() << "FullName: " << it->GetFullName();
+            // qDebug() << "VendorName: " << it->GetVendorName() << "DeviceClass: " << it->GetDeviceClass() ;
+        }
+        UpdateCameraList();
+        emit sigCameraCount(transportLayerCount);
+        // qDebug() << "transportLayerCount Count: " << transportLayerCount;
+        return true;
+    }else{
+        return false;
     }
-    UpdateCameraList();
-    emit sigCameraCount(transportLayerCount);
-    // qDebug() << "transportLayerCount Count: " << transportLayerCount;
+
 }
 
+void BaslerCameraControl::grab()
+{
+    // cv::namedWindow("window", cv::WINDOW_AUTOSIZE);
 
+    // qDebug() << "Camera thread ID:" << QThread::currentThreadId();
+    if(m_isOpenAcquire && m_isOpen)
+    {
+        QMutexLocker locker(&m_frameMutex);
+        GrabImage(this->img_Q);
+        if(!this->img_Q.isNull()) {
+            emit sigCurrentImage(this->img_Q);
+            cv::Mat img;
+            qImageToCvMat(this->img_Q, img);
+            updateFrame(img);
+            // cv::imshow("window", this->img_cv);
+            // cv::waitKey(1);
+        }
+    }
+
+}
 void BaslerCameraControl::deleteAll()
 {
     //停止采集
@@ -107,29 +141,30 @@ void BaslerCameraControl::CopyToImage(CGrabResultPtr pInBuffer, QImage &OutImage
     }
 }
 
-void BaslerCameraControl::onTimerGrabImage()
+void BaslerCameraControl::CopyBayerToImage(CGrabResultPtr pInBuffer, QImage &OutImage)
 {
-    if(m_isOpenAcquire && m_isOpen) {
-        QImage image;
-        GrabImage(image);
-        if(!image.isNull()) {
-            emit sigCurrentImage(image);
-
-            // // cv::Mat img = cv::imread("D:/Project/CHR/Git/MicroAssembly/res/1.png",1);//一定要使用绝对路径，其他可以回报错
-            cv::Mat img = qImageToCvMat(image);
-
-            if(img.empty()) {
-                std::cerr << "Image not found or unable to open" << std::endl;
-            }
-            else{
-                cv::namedWindow("Display window", cv::WINDOW_AUTOSIZE );
-                cv::imshow("Display window", img);
-            }
-
-
-        }
-        QTimer::singleShot(20, this, SLOT(onTimerGrabImage()));
+    uchar* buff = (uchar*)pInBuffer->GetBuffer();
+    int nHeight = pInBuffer->GetHeight();
+    int nWidth = pInBuffer->GetWidth();
+    
+    if(m_size != QSize(nWidth, nHeight)) {
+        m_size = QSize(nWidth, nHeight);
+        emit sigSizeChange(m_size);
     }
+    
+    // 创建 OpenCV Mat 来处理 Bayer 数据
+    cv::Mat bayerMat(nHeight, nWidth, CV_8UC1, buff);
+    cv::Mat rgbMat;
+    
+    // 将 Bayer RG8 转换为 RGB
+    cv::cvtColor(bayerMat, rgbMat, cv::COLOR_BayerRG2RGB);
+    
+    // 转换为 QImage
+    OutImage = QImage(rgbMat.data, 
+                      rgbMat.cols, 
+                      rgbMat.rows, 
+                      rgbMat.step, 
+                      QImage::Format_RGB888).copy();
 }
 
 int BaslerCameraControl::openCamera(QString cameraName)
@@ -211,17 +246,6 @@ int BaslerCameraControl::getGain()
 {
     // if(!m_isOpen) return -1;
     return QString::number(GetCamera(Type_Basler_GainRaw)).toInt();
-}
-
-void BaslerCameraControl::setFrameRate(int value)
-{
-    // if(!m_isOpen) return;
-    SetCamera(Type_Basler_AcquisitionFrameRateAbs, value);
-}
-int BaslerCameraControl::getFrameRate()
-{
-    // if(!m_isOpen) return -1;
-    return QString::number(GetCamera(Type_Basler_AcquisitionFrameRateAbs)).toInt();
 }
 
 
@@ -394,19 +418,19 @@ long BaslerCameraControl::StartAcquire()
         qDebug() << "BaslerCameraControl StartAcquire" << m_currentMode;
         if(m_currentMode == "Freerun")  {
             m_basler.StartGrabbing(GrabStrategy_LatestImageOnly,GrabLoop_ProvidedByInstantCamera);
-            onTimerGrabImage();
+            this->m_coarseTimer_->start();
         } else if(m_currentMode == "Software") {
             m_basler.StartGrabbing(GrabStrategy_LatestImageOnly);
-            onTimerGrabImage();
+            this->m_coarseTimer_->start();
         } else if(m_currentMode == "Line1") {
             m_basler.StartGrabbing(GrabStrategy_OneByOne);
-            onTimerGrabImage();
+            this->m_coarseTimer_->start();
         } else if(m_currentMode == "Line2") {
             m_basler.StartGrabbing(GrabStrategy_OneByOne);
-            onTimerGrabImage();
+            this->m_coarseTimer_->start();
         }
     } catch (GenICam::GenericException &e) {
-        OutputDebugString(L"StartAcquire error:");
+        qDebug() << e.what();
         return -2;
     }
     return 0;
@@ -418,6 +442,7 @@ long BaslerCameraControl::StopAcquire()
     m_isOpenAcquire = false;
     qDebug() << "BaslerCameraControl StopAcquire";
     try {
+        this->m_coarseTimer_->stop();
         if (m_basler.IsGrabbing()) {
             m_basler.StopGrabbing();
         }
@@ -453,8 +478,13 @@ long BaslerCameraControl::GrabImage(QImage &image, int timeout)
             case PixelType_Mono8: {
                 CopyToImage(ptrGrabResult, image);
             } break;
-            case PixelType_BayerRG8: { qDebug() << "what: PixelType_BayerRG8"; }  break;
-            default:  qDebug() << "what: default"; break;
+            case PixelType_BayerRG8: {
+                CopyBayerToImage(ptrGrabResult, image);
+            } break;
+            default:  
+                qDebug() << "Unsupported pixel format:" << pixelType; 
+                return -4;
+                break;
             }
         } else {
             // OutputDebugString(L"Grab Error!!!");
@@ -471,7 +501,19 @@ long BaslerCameraControl::GrabImage(QImage &image, int timeout)
     return 0;
 }
 
-cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
+cv::Mat BaslerCameraControl::saveDesiredImage()
+{
+    cv::Mat img_64f = getLatestFrame();
+    cv::Mat img_8u;
+    img_64f.convertTo(img_8u, CV_8UC1, 255.0);
+    // 存储
+    cv::imwrite("E:/QT/Microscopic_Visual_Servoing/resources/data/image_desired.png", img_8u);
+    return img_64f;
+}
+
+//Qimage 与 cv mat转换
+void BaslerCameraControl::qImageToCvMat(const QImage& qImage, cv::Mat & image)
+{
     switch (qImage.format()) {
     case QImage::Format_RGB32:
     case QImage::Format_ARGB32:
@@ -480,25 +522,20 @@ cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
         cv::Mat mat(qImage.height(), qImage.width(), CV_8UC4,
                     const_cast<uchar*>(qImage.bits()),
                     static_cast<size_t>(qImage.bytesPerLine()));
-        cv::Mat result;
-        cv::cvtColor(mat, result, cv::COLOR_BGRA2BGR);
-        return result;
+        cv::cvtColor(mat, image, cv::COLOR_BGRA2BGR); // 正确转换颜色通道
     }
     case QImage::Format_RGB888: {
         // 转换RGB888到BGR格式
         cv::Mat mat(qImage.height(), qImage.width(), CV_8UC3,
                     const_cast<uchar*>(qImage.bits()),
                     static_cast<size_t>(qImage.bytesPerLine()));
-        cv::Mat result;
-        cv::cvtColor(mat, result, cv::COLOR_RGB2BGR);
-        return result;
+        cv::cvtColor(mat, image, cv::COLOR_RGB2BGR); // 修正颜色顺序
     }
     case QImage::Format_Grayscale8: {
         // 直接复制灰度图像数据
-        cv::Mat mat(qImage.height(), qImage.width(), CV_8UC1,
-                    const_cast<uchar*>(qImage.bits()),
-                    static_cast<size_t>(qImage.bytesPerLine()));
-        return mat.clone();
+        image = cv::Mat(qImage.height(), qImage.width(), CV_8UC1,
+                        const_cast<uchar*>(qImage.bits()),
+                        static_cast<size_t>(qImage.bytesPerLine()));
     }
     case QImage::Format_Indexed8: {
         cv::Mat mat(qImage.height(), qImage.width(), CV_8UC1,
@@ -506,32 +543,34 @@ cv::Mat BaslerCameraControl::qImageToCvMat(const QImage& qImage) {
                     qImage.bytesPerLine());
 
         if (qImage.colorTable().isEmpty()) {
-            return mat.clone();
+            image =  mat.clone();
         }
+        else{
+            // 预计算调色板（BGR顺序）
+            std::vector<cv::Vec3b> palette;
+            for (QRgb rgb : qImage.colorTable()) {
+                palette.emplace_back(cv::Vec3b(qBlue(rgb), qGreen(rgb), qRed(rgb)));
+            }
 
-        // 预计算调色板（BGR顺序）
-        std::vector<cv::Vec3b> palette;
-        for (QRgb rgb : qImage.colorTable()) {
-            palette.emplace_back(cv::Vec3b(qBlue(rgb), qGreen(rgb), qRed(rgb)));
-        }
-
-        // 应用调色板
-        cv::Mat colorMat(mat.size(), CV_8UC3);
-        for (int y = 0; y < mat.rows; ++y) {
-            const uchar* src = mat.ptr<uchar>(y);
-            cv::Vec3b* dst = colorMat.ptr<cv::Vec3b>(y);
-            for (int x = 0; x < mat.cols; ++x) {
-                dst[x] = palette[src[x]];
+            // 应用调色板
+            image =cv::Mat(mat.size(), CV_8UC3);
+            for (int y = 0; y < mat.rows; ++y) {
+                const uchar* src = mat.ptr<uchar>(y);
+                cv::Vec3b* dst = image.ptr<cv::Vec3b>(y);
+                for (int x = 0; x < mat.cols; ++x) {
+                    dst[x] = palette[src[x]];
+                }
             }
         }
-        return colorMat;
+        break;
     }
-
     default:
         qWarning() << "Unsupported QImage format:" << qImage.format();
-        return cv::Mat();
     }
+
+    image.convertTo(image, CV_64F, 1.0/255.0);
 }
+
 // cv::Mat转QImage实现
 QImage BaslerCameraControl::cvMatToQImage(const cv::Mat& mat)
 {
@@ -561,6 +600,13 @@ QImage BaslerCameraControl::cvMatToQImage(const cv::Mat& mat)
                           mat.rows,
                           static_cast<int>(mat.step),
                           QImage::Format_Grayscale8).copy();
+        case CV_64FC1: {
+            cv::Mat normalized;
+            // 归一化到 [0, 255] 并转换为 8UC1
+            mat.convertTo(normalized, CV_8UC1, 255.0);
+            return  QImage(normalized.data, normalized.cols, normalized.rows,
+                          normalized.step, QImage::Format_Grayscale8).copy();
+        }
         default:
             qWarning() << "Unsupported cv::Mat type:" << mat.type();
             return QImage();
@@ -568,4 +614,29 @@ QImage BaslerCameraControl::cvMatToQImage(const cv::Mat& mat)
     } catch (...) {
         return QImage();
     }
+}
+
+// 获取帧
+cv::Mat BaslerCameraControl::getLatestFrame() {
+    return this->img_vs[m_readIndex.load()].clone();
+}
+
+// 更新帧（在采集线程中）
+void BaslerCameraControl::updateFrame(const cv::Mat& newFrame) {
+    int writeIndex = 1 - m_readIndex.load();
+    this->img_vs[writeIndex] = newFrame.clone();
+    m_readIndex.store(writeIndex);
+}
+
+int BaslerCameraControl::getFrameRate()
+{
+    return this->fps;
+}
+
+
+std::shared_ptr<const cv::Mat> BaslerCameraControl::getLatestFrameShared() const
+{
+    QMutexLocker locker(&m_frameMutex);
+
+    return std::make_shared<cv::Mat>(this->img_vs[m_readIndex.load()]);
 }

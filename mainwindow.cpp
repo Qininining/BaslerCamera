@@ -7,7 +7,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    m_Camera = new BaslerCameraControl(this);
+    m_Camera = new BaslerCameraControl(30);
     m_Camera->init();
 
     connect(m_Camera, &BaslerCameraControl::sigCurrentImage, [=](QImage img){

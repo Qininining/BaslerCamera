@@ -5,19 +5,21 @@
 #include <QImage>
 #include <QTimer>
 #include <QDebug>
+#include <QThread>
 
 #include <pylon/PylonIncludes.h>
 #include <pylon/BaslerUniversalInstantCamera.h>
 #include <opencv2/opencv.hpp>
+#include <QMutex>
 
 using namespace Pylon;
 using namespace GenApi;
 
-class BaslerCameraControl : public QObject
+class BaslerCameraControl:  public QObject
 {
     Q_OBJECT
 public:
-    explicit BaslerCameraControl(QObject *parent = nullptr);
+    explicit BaslerCameraControl(double hz);
     ~BaslerCameraControl();
 
     enum BaslerCameraControl_Type{
@@ -31,14 +33,13 @@ public:
         Type_Basler_LineSource, //灯的触发信号
     };
 
-    void init();
+    bool init();
     void deleteAll();
     QStringList cameras();
     int openCamera(QString cameraName);
     int closeCamera();
     bool isOpen();
-
-
+    void grab();
 
     void setFeatureTriggerSourceType(QString type); // 设置种类
     QString getFeatureTriggerSourceType(); // 获取种类：软触发、外触发等等
@@ -52,18 +53,21 @@ public:
     int getExposureTime(); // 获取曝光时间
     void setGain(double Gain);
     int getGain();
-    void setFrameRate(int value);
     int getFrameRate();
     void autoExposureOnce();
+
 
     long GrabImage(QImage& image,int timeout = 2000);
 
     long StartAcquire(); // 开始采集
     long StopAcquire(); // 结束采集
 
-    cv::Mat qImageToCvMat(const QImage& qImage);
+    void qImageToCvMat(const QImage& qImage, cv::Mat & image);
     QImage cvMatToQImage(const cv::Mat& mat);
-
+    std::shared_ptr<const cv::Mat> getLatestFrameShared() const;
+    cv::Mat getLatestFrame();
+    cv::Mat saveDesiredImage();
+    void updateFrame(const cv::Mat& newFrame);
 
 signals:
     void sigCameraUpdate(QStringList list);
@@ -74,9 +78,7 @@ signals:
 private:
     void UpdateCameraList();
     void CopyToImage(CGrabResultPtr pInBuffer, QImage &OutImage);
-
-private slots:
-    void onTimerGrabImage();
+    void CopyBayerToImage(CGrabResultPtr pInBuffer, QImage &OutImage);
 
 private:
     CBaslerUniversalInstantCamera m_basler;
@@ -85,7 +87,14 @@ private:
     bool m_isOpenAcquire = false; // 是否开始采集
     bool m_isOpen = false; // 是否打开摄像头
     QSize m_size;
-};
+    mutable QMutex m_frameMutex;
+    QTimer *m_coarseTimer_;
+    int fps;
 
+public:
+    QImage img_Q;
+    cv::Mat img_vs[2];
+    std::atomic<int> m_readIndex{0};
+};
 
 #endif // BASLERCAMERACONTROL_H
